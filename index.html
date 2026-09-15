@@ -1,0 +1,1509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Delivery Boy Pathfinder — Learn Dijkstra's Algorithm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ============================================================
+     DESIGN TOKENS
+     A friendly "city map game" palette: parchment-green map,
+     teal roads/nodes, golden home, red customer pin, bright
+     green solved-path, orange call-to-action.
+     ============================================================ */
+  :root{
+    --bg-sky:        #eef5f6;
+    --map-fill:      #eef3e2;
+    --map-grid:      #dbe6cf;
+    --road:          #9aa7ad;
+    --road-dark:     #6b7680;
+    --node-fill:     #ffffff;
+    --node-ring:     #2f9e8f;
+    --node-visited:  #7bd0c4;
+    --node-active:   #ffcf56;
+    --node-current:  #2f9e8f;
+    --home:          #f2b134;
+    --customer:      #e2483d;
+    --path:          #38c172;
+    --path-dark:     #24a15b;
+    --ink:           #223138;
+    --ink-soft:      #5a6b70;
+    --card:          #ffffff;
+    --card-border:   #dfe8e2;
+    --accent:        #ff7a45;
+    --accent-dark:   #e0602c;
+    --teal:          #2f9e8f;
+    --teal-dark:     #237e72;
+    --shadow:        0 6px 18px rgba(34,49,56,0.12);
+    --radius:        16px;
+    --font-display:  'Baloo 2', 'Segoe UI Rounded', 'Trebuchet MS', sans-serif;
+    --font-body:     'Nunito', 'Segoe UI', 'Trebuchet MS', sans-serif;
+  }
+
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html{
+    touch-action: manipulation; /* avoid double-tap-to-zoom delay on buttons/nodes */
+    overflow-x: hidden;
+    width: 100%;
+  }
+
+  /* ROOT-CAUSE FIX 1: the page had no overflow-x guard, so anything that
+     ran even 1px wider than the viewport (long words, wide cards) forced
+     iOS/Android browsers into horizontal-scroll mode, which looked like
+     a "broken"/cropped game. Locking overflow-x here + width:100% below
+     removes that entire class of bug. */
+  body{
+    margin:0;
+    min-height:100vh;
+    min-height:100dvh; /* ROOT-CAUSE FIX 2: 100vh on iOS Safari is measured
+      including the address bar, so content got cut off / jumped when the
+      bar hid on scroll. 100dvh tracks the *actual visible* viewport. */
+    width:100%;
+    overflow-x: hidden;
+    overscroll-behavior: none;
+    background:
+      radial-gradient(circle at 15% 10%, #fbeeda 0%, transparent 45%),
+      radial-gradient(circle at 90% 0%, #dcefe9 0%, transparent 40%),
+      var(--bg-sky);
+    font-family: var(--font-body);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    padding-bottom: env(safe-area-inset-bottom); /* iPhone home-indicator */
+  }
+
+  button, .node-circle, .pin-pulse, .brand, h1,h2,h3{
+    -webkit-user-select:none; user-select:none; /* stop iOS long-press "Copy/Select" bubble on game UI */
+  }
+
+  h1,h2,h3, .brand, .btn, .stat-num { font-family: var(--font-display); }
+
+  /* ---------------- Header ---------------- */
+  header.app-header{
+    display:flex; align-items:center; justify-content:space-between;
+    flex-wrap:wrap; gap:10px;
+    padding: 14px 22px;
+    padding-top: calc(14px + env(safe-area-inset-top)); /* clear iPhone notch */
+    padding-left: calc(22px + env(safe-area-inset-left));
+    padding-right: calc(22px + env(safe-area-inset-right));
+    background: linear-gradient(120deg, var(--teal), #237e72 130%);
+    color:#fff;
+    box-shadow: var(--shadow);
+  }
+  .sound-toggle{
+    background: rgba(255,255,255,0.16);
+    border: 1px solid rgba(255,255,255,0.35);
+    color:#fff; border-radius:999px; cursor:pointer;
+    width:38px; height:38px; font-size:1.1rem; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .sound-toggle:active{ transform: scale(0.92); }
+  .brand{
+    display:flex; align-items:center; gap:10px;
+    font-size: 1.5rem; font-weight:700; letter-spacing:0.3px;
+  }
+  .brand .bike-emoji{ font-size:1.7rem; transform: translateY(1px); }
+  .hud{
+    display:flex; gap:14px; flex-wrap:wrap;
+  }
+  .hud .pill{
+    background: rgba(255,255,255,0.16);
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.92rem;
+    display:flex; align-items:center; gap:6px;
+  }
+  .hud .stat-num{ font-weight:700; font-size:1.05rem; }
+
+  /* ---------------- Layout ---------------- */
+  .layout{
+    display:grid;
+    grid-template-columns: 1fr 340px;
+    gap: 18px;
+    padding: 18px 22px 40px;
+    padding-left: calc(22px + env(safe-area-inset-left));
+    padding-right: calc(22px + env(safe-area-inset-right));
+    align-items:start;
+    max-width: 100%;
+  }
+  @media (max-width: 900px){
+    .layout{ grid-template-columns: 1fr; }
+  }
+
+  /* ---------------- Controls bar ---------------- */
+  .controls{
+    grid-column: 1 / -1;
+    display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+    background: var(--card);
+    border:1px solid var(--card-border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    box-shadow: var(--shadow);
+  }
+  .btn{
+    border:none; cursor:pointer;
+    font-weight:600; font-size:0.95rem;
+    padding: 10px 18px;
+    min-height: 44px; /* comfortable touch target on phones */
+    border-radius: 999px;
+    color:#fff;
+    transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+    box-shadow: 0 3px 0 rgba(0,0,0,0.15);
+  }
+  .btn:hover:not(:disabled){ filter: brightness(1.06); transform: translateY(-1px); }
+  .btn:active:not(:disabled){ transform: translateY(1px); box-shadow:0 1px 0 rgba(0,0,0,0.15); }
+  .btn:disabled{ opacity:0.45; cursor:not-allowed; }
+  .btn-order   { background: var(--customer); }
+  .btn-dijkstra{ background: var(--accent); }
+  .btn-manual  { background: var(--teal); }
+  .btn-reset   { background: var(--ink-soft); }
+  .btn-ghost{
+    background: transparent; color: var(--ink-soft);
+    border: 1px solid var(--card-border); box-shadow:none;
+  }
+  .spacer{ flex:1; }
+
+  /* ---------------- Map card ---------------- */
+  .map-card{
+    background: var(--card);
+    border:1px solid var(--card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 14px;
+    position:relative;
+    overflow:hidden;
+  }
+  #mapSvg{
+    width:100%; height:auto; display:block;
+    background: var(--map-fill);
+    border-radius: 12px;
+  }
+  .legend{
+    display:flex; gap:16px; flex-wrap:wrap;
+    font-size:0.82rem; color:var(--ink-soft);
+    margin-top:10px;
+  }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .swatch{ width:12px; height:12px; border-radius:50%; display:inline-block; }
+
+  /* order popup */
+  .order-toast{
+    position:absolute; top:18px; left:50%; transform: translateX(-50%) translateY(-14px);
+    background:#fff; border:2px solid var(--customer);
+    border-radius: 14px; padding: 10px 18px;
+    box-shadow: var(--shadow);
+    font-weight:700; color: var(--customer);
+    opacity:0; pointer-events:none;
+    transition: opacity .25s ease, transform .25s ease;
+    z-index: 5;
+    text-align:center;
+  }
+  .order-toast.show{
+    opacity:1; transform: translateX(-50%) translateY(0);
+  }
+
+  /* delivery result modal */
+  .result-modal-bg{
+    position:fixed; inset:0; background:rgba(34,49,56,0.45);
+    display:flex; align-items:center; justify-content:center;
+    z-index:50; opacity:0; pointer-events:none; transition: opacity .2s ease;
+  }
+  .result-modal-bg.show{ opacity:1; pointer-events:all; }
+  .result-modal{
+    background:#fff; border-radius: 20px; padding: 26px 30px;
+    max-width: 380px; width:90%; text-align:center;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+    transform: translateY(10px) scale(0.96);
+    transition: transform .25s ease;
+  }
+  .result-modal-bg.show .result-modal{ transform: translateY(0) scale(1); }
+  .result-modal h2{ margin:0 0 6px; color: var(--teal-dark); }
+  .completed-banner{
+    display:inline-block; background: var(--path); color:#fff;
+    font-family: var(--font-display); font-weight:700; font-size:0.85rem;
+    padding:4px 14px; border-radius:999px; margin-bottom:10px;
+    animation: pop-in .35s ease;
+  }
+  @keyframes pop-in{ 0%{ transform:scale(0.6); opacity:0;} 70%{ transform:scale(1.08);} 100%{ transform:scale(1); opacity:1;} }
+  .result-divider{ border:none; border-top:1px dashed var(--card-border); margin:10px 0; }
+  .stars{ font-size:2rem; margin: 10px 0; letter-spacing:4px; }
+  .result-row{ display:flex; justify-content:space-between; font-size:0.95rem; margin:4px 0; }
+  .result-row b{ color:var(--ink); }
+  .result-row.result-total{ font-weight:800; font-size:1.05rem; color: var(--teal-dark); border-top:1px solid var(--card-border); padding-top:6px; margin-top:6px; }
+  .result-row.result-total b{ color: var(--teal-dark); }
+
+  /* ---------------- Side panel ---------------- */
+  .side-panel{ display:flex; flex-direction:column; gap:16px; }
+  .panel-card{
+    background: var(--card);
+    border:1px solid var(--card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+  }
+  .panel-card h3{
+    margin: 0 0 8px; font-size:1.05rem; color:var(--teal-dark);
+    display:flex; align-items:center; gap:8px;
+  }
+  .panel-sub{ font-size:0.82rem; color:var(--ink-soft); margin: -4px 0 10px; }
+
+  table.dtable{ width:100%; border-collapse: collapse; font-size:0.85rem; }
+  table.dtable th, table.dtable td{
+    padding: 5px 6px; text-align:center; border-bottom:1px solid var(--card-border);
+  }
+  table.dtable th{ color:var(--ink-soft); font-weight:700; }
+  table.dtable tr.row-visiting td{ background: #fff4d6; }
+  table.dtable tr.row-visited td{ background: #e4f7f1; color: var(--teal-dark); font-weight:700;}
+  .dtable-empty{ font-size:0.85rem; color:var(--ink-soft); text-align:center; padding: 14px 0; }
+
+  .live-counters{ display:flex; gap:10px; margin-top:10px; }
+  .counter{
+    flex:1; background: #f3f8f5; border-radius:10px; padding:8px; text-align:center;
+  }
+  .counter .n{ font-family: var(--font-display); font-size:1.15rem; color: var(--teal-dark); }
+  .counter .l{ font-size:0.72rem; color: var(--ink-soft); }
+
+  /* collapsible edu panel */
+  details.edu{ }
+  details.edu summary{
+    cursor:pointer; font-weight:700; color: var(--accent-dark);
+    list-style:none; display:flex; align-items:center; gap:8px;
+  }
+  details.edu summary::-webkit-details-marker{ display:none; }
+  details.edu summary::before{ content:'▶'; font-size:0.7rem; transition: transform .15s ease; }
+  details.edu[open] summary::before{ transform: rotate(90deg); }
+  .edu-body{ font-size:0.88rem; line-height:1.5; color:var(--ink-soft); margin-top:10px; }
+  .edu-body ol{ padding-left:1.1em; margin:8px 0; }
+  .edu-body code{ background:#f0f4f1; border-radius:4px; padding:1px 5px; }
+  .edu-body-sub{ font-weight:700; color:var(--ink); margin:14px 0 2px; font-size:0.85rem; }
+  .route-visual{
+    background: linear-gradient(120deg,#eafaf3,#f3f8f5);
+    border:1px dashed var(--teal);
+    border-radius:10px; padding:10px 12px; margin:12px 0;
+    font-weight:700; color: var(--teal-dark); font-size:0.85rem;
+    text-align:center; word-break: break-word; line-height:1.6;
+  }
+
+  .manual-hint{
+    font-size:0.85rem; color: var(--teal-dark); background:#eaf7f2;
+    border:1px dashed var(--teal); border-radius:10px; padding:8px 10px; margin-top:8px;
+    display:none;
+  }
+  .manual-hint.show{ display:block; }
+
+  /* manual mode road-choice buttons */
+  .manual-panel{ display:none; }
+  .manual-panel.show{ display:block; }
+  .road-buttons{ display:flex; flex-direction:column; gap:8px; }
+  .road-btn{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    width:100%; text-align:left;
+    background:#f3f8f5; border:2px solid var(--teal);
+    border-radius:12px; padding:12px 14px;
+    min-height: 46px; /* comfortable touch target on phones */
+    font-family: var(--font-body); font-weight:700; color: var(--teal-dark);
+    cursor:pointer; transition: background .15s ease, transform .12s ease;
+  }
+  .road-btn:hover:not(:disabled){ background:#e2f4ee; transform: translateX(2px); }
+  .road-btn:active:not(:disabled){ transform: translateX(0) scale(0.98); }
+  .road-btn .rb-dist{
+    background:#fff; border-radius:999px; padding:2px 10px;
+    font-size:0.82rem; color: var(--road-dark); font-weight:700;
+    border:1px solid var(--card-border);
+  }
+  .road-btn:disabled{ opacity:0.5; cursor:not-allowed; }
+
+  footer.credits{
+    text-align:center; font-size:0.78rem; color:var(--ink-soft); padding: 6px 0 20px;
+  }
+
+  /* SVG helper classes (applied via JS by toggling class names on elements).
+     Every size below is expressed as calc(realPixels / var(--map-scale)),
+     where --map-scale is set in JS to (rendered SVG width / 800). That
+     keeps roads, labels, nodes, the pin, and the bike a CONSTANT physical
+     size on screen whether the map renders at 800px on a laptop or 320px
+     on a phone — this is the actual fix for the "tiny unreadable map
+     text on mobile" bug (see computeMapScale() in the script). */
+  .node-label{ font-family: var(--font-body); font-weight:700; font-size: calc(14px / var(--map-scale, 1)); fill: var(--ink); }
+  .edge-weight-bg{ fill:#fff; stroke:var(--card-border); }
+  .edge-weight-text{ font-family: var(--font-body); font-size: calc(12px / var(--map-scale, 1)); font-weight:700; fill: var(--road-dark); }
+  .edge-line{ stroke: var(--road); stroke-width: calc(4px / var(--map-scale, 1)); stroke-linecap:round; }
+  .edge-line.path-line{ stroke: var(--path); stroke-width: calc(7px / var(--map-scale, 1)); }
+  .node-circle{
+    fill: var(--node-fill); stroke: var(--node-ring);
+    stroke-width: calc(3px / var(--map-scale, 1));
+    r: calc(16px / var(--map-scale, 1));
+    cursor:default; transition: fill .25s ease, stroke .25s ease, r .2s ease;
+  }
+  .node-circle.is-home{ stroke: var(--home); }
+  .node-circle.is-current{ fill: var(--node-current); }
+  .node-circle.is-visiting{ fill: var(--node-active); stroke: var(--node-active); }
+  .node-circle.is-visited{ fill: var(--node-visited); }
+  .node-circle.is-clickable{ cursor:pointer; stroke: var(--accent); stroke-dasharray: 4 3; }
+  .node-circle.is-clickable:hover{ r: calc(20px / var(--map-scale, 1)); }
+  .map-pin{ font-size: calc(24px / var(--map-scale, 1)); }
+  .bike-marker{ font-size: calc(22px / var(--map-scale, 1)); }
+  .pin-pulse{ animation: pulse 1.4s ease-in-out infinite; transform-origin:center; }
+  @keyframes pulse{ 0%,100%{ transform: scale(1); opacity:1;} 50%{ transform: scale(1.25); opacity:0.6;} }
+
+  /* ---------------- Start screen ---------------- */
+  .start-screen{
+    position:fixed; inset:0; z-index:100;
+    display:flex; align-items:center; justify-content:center;
+    padding: 20px; padding-top: calc(20px + env(safe-area-inset-top));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    background:
+      radial-gradient(circle at 20% 15%, rgba(255,255,255,0.15) 0%, transparent 45%),
+      linear-gradient(160deg, #237e72, #1a5c53 70%);
+    text-align:center;
+    transition: opacity .35s ease, visibility .35s ease;
+  }
+  .start-screen.hide{ opacity:0; visibility:hidden; pointer-events:none; }
+  .start-card{
+    background:#fff; border-radius:22px; padding: 32px 28px;
+    max-width: 420px; width:100%;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+    max-height: 90dvh; overflow-y:auto;
+  }
+  .start-card .emoji-hero{ font-size:3.2rem; display:block; margin-bottom:6px; }
+  .start-card h1{ margin:0 0 6px; font-size:1.7rem; color:var(--teal-dark); }
+  .start-card p.tagline{ margin:0 0 18px; color:var(--ink-soft); font-size:0.95rem; }
+  .how-to{ text-align:left; background:#f3f8f5; border-radius:14px; padding:14px 16px; margin-bottom:20px; font-size:0.88rem; color:var(--ink); }
+  .how-to li{ margin-bottom:6px; }
+  .btn-start-play{
+    background: var(--accent); color:#fff; border:none; width:100%;
+    font-family: var(--font-display); font-size:1.15rem; font-weight:700;
+    padding:14px; border-radius:999px; cursor:pointer;
+    box-shadow: 0 4px 0 var(--accent-dark);
+  }
+  .btn-start-play:active{ transform: translateY(2px); box-shadow:0 2px 0 var(--accent-dark); }
+
+  /* ---------------- New-order attention pulse ---------------- */
+  .btn-order.attn{ animation: order-glow 1.4s ease-in-out infinite; }
+  @keyframes order-glow{
+    0%,100%{ box-shadow: 0 3px 0 rgba(0,0,0,0.15), 0 0 0 0 rgba(226,72,61,0.5); }
+    50%{ box-shadow: 0 3px 0 rgba(0,0,0,0.15), 0 0 0 10px rgba(226,72,61,0); }
+  }
+
+  /* ---------------- Level-up toast ---------------- */
+  .levelup-toast{
+    position:fixed; top:18px; left:50%; transform: translateX(-50%) translateY(-20px);
+    background: linear-gradient(120deg,#f2b134,#ffdd8a);
+    color:#5a3d00; font-family: var(--font-display); font-weight:700; font-size:1.05rem;
+    padding: 12px 24px; border-radius:14px; box-shadow: var(--shadow);
+    z-index: 80; opacity:0; pointer-events:none;
+    transition: opacity .3s ease, transform .3s ease;
+  }
+  .levelup-toast.show{ opacity:1; transform: translateX(-50%) translateY(0); }
+
+  /* ---------------- Floating +points ---------------- */
+  .float-pts{
+    position:absolute; font-family: var(--font-display); font-weight:700;
+    color: var(--teal-dark); font-size:1.1rem; pointer-events:none;
+    animation: float-up 1.1s ease-out forwards; z-index: 6;
+  }
+  @keyframes float-up{
+    0%{ opacity:0; transform: translateY(0) scale(0.8); }
+    15%{ opacity:1; transform: translateY(-6px) scale(1.05); }
+    100%{ opacity:0; transform: translateY(-46px) scale(1); }
+  }
+
+  /* ---------------- Milestone "shift complete" modal ---------------- */
+  .milestone-card{ background:#fff; border-radius:20px; padding:28px 30px; max-width:400px; width:90%; text-align:center; box-shadow:0 20px 50px rgba(0,0,0,0.25); }
+  .milestone-card h2{ margin:0 0 4px; color: var(--home); font-size:1.5rem; }
+  .milestone-card .sub{ color:var(--ink-soft); font-size:0.9rem; margin-bottom:16px; }
+  .milestone-stats{ display:flex; gap:10px; margin-bottom:18px; }
+  .milestone-stats .counter{ flex:1; }
+  .milestone-actions{ display:flex; gap:10px; }
+  .milestone-actions .btn{ flex:1; }
+</style>
+</head>
+<body>
+
+<!-- START SCREEN -->
+<div class="start-screen" id="startScreen">
+  <div class="start-card">
+    <span class="emoji-hero">🛵📦</span>
+    <h1>Delivery Boy Pathfinder</h1>
+    <p class="tagline">Learn how Dijkstra's shortest-path algorithm works by actually delivering the food yourself.</p>
+    <ul class="how-to">
+      <li>📮 Tap <b>New Order</b> — a customer appears somewhere on the map.</li>
+      <li>🧠 Tap <b>Find Shortest Path</b> to watch Dijkstra's algorithm explore the map and find the best route.</li>
+      <li>🕹️ Or try <b>Manual Mode</b> first and pick your own roads — then see how close you got to the optimal path!</li>
+      <li>⭐ Earn stars and points for efficient deliveries and level up as you go.</li>
+    </ul>
+    <button class="btn-start-play" id="btnStartPlay">🚦 Start Delivering</button>
+  </div>
+</div>
+
+<header class="app-header">
+  <div class="brand"><span class="bike-emoji">🛵</span> Delivery Boy Pathfinder</div>
+  <div class="hud">
+    <div class="pill">⭐ Score <span class="stat-num" id="hudScore">0</span></div>
+    <div class="pill">📈 Level <span class="stat-num" id="hudLevel">1</span></div>
+    <div class="pill">📦 Deliveries <span class="stat-num" id="hudDeliveries">0/5</span></div>
+    <div class="pill">⏱️ Time <span class="stat-num" id="hudTime">0s</span></div>
+    <div class="pill">🪙 Coins <span class="stat-num" id="hudCoins">0</span></div>
+    <button class="sound-toggle" id="btnSound" title="Toggle sound" aria-label="Toggle sound">🔊</button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- CONTROLS -->
+  <div class="controls">
+    <button class="btn btn-order" id="btnNewOrder">📮 New Order</button>
+    <button class="btn btn-dijkstra" id="btnDijkstra" disabled>🧠 Find Shortest Path (Dijkstra)</button>
+    <button class="btn btn-manual" id="btnManual" disabled>🕹️ Manual Mode</button>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost" id="btnReset">🔄 Reset Game</button>
+  </div>
+
+  <!-- MAP -->
+  <div class="map-card" id="mapCard">
+    <div class="order-toast" id="orderToast"></div>
+    <div class="levelup-toast" id="levelupToast">📈 Level Up! New, trickier city unlocked!</div>
+    <svg id="mapSvg" viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--home)"></span> Home / current spot</span>
+      <span><span class="swatch" style="background:var(--customer)"></span> Customer (order)</span>
+      <span><span class="swatch" style="background:var(--node-active)"></span> Being visited</span>
+      <span><span class="swatch" style="background:var(--node-visited)"></span> Visited</span>
+      <span><span class="swatch" style="background:var(--path)"></span> Shortest path</span>
+    </div>
+  </div>
+
+  <!-- SIDE PANEL -->
+  <div class="side-panel">
+
+    <div class="panel-card">
+      <h3>📊 Dijkstra Distance Table</h3>
+      <div class="panel-sub">Updates live while the algorithm runs</div>
+      <div id="tableWrap"><div class="dtable-empty">Place an order and click "Find Shortest Path" to watch this fill in.</div></div>
+    </div>
+
+    <div class="panel-card">
+      <h3>🚴 Delivery Stats</h3>
+      <div class="live-counters">
+        <div class="counter"><div class="n" id="statDistance">0</div><div class="l">km covered</div></div>
+        <div class="counter"><div class="n" id="statTime">0</div><div class="l">minutes</div></div>
+        <div class="counter"><div class="n" id="statBest">–</div><div class="l">shortest km</div></div>
+      </div>
+      <div class="manual-hint" id="manualHint">🕹️ Manual mode is ON — pick a road below to ride there!</div>
+    </div>
+
+    <div class="panel-card manual-panel" id="manualPanel">
+      <h3>🕹️ Choose Your Next Road</h3>
+      <div class="panel-sub">These are the roads connected to your current spot.</div>
+      <div class="road-buttons" id="roadButtons"></div>
+    </div>
+
+    <div class="panel-card">
+      <details class="edu" id="eduPanel" open>
+        <summary>💡 Algorithm Explanation — How Dijkstra Works</summary>
+        <div class="edu-body" id="eduBody">
+          <p><b>Dijkstra's Algorithm</b> is a shortest-path algorithm used to find the minimum-cost path between a starting node and other nodes in a weighted graph.</p>
+
+          <p><b>How it works in this game:</b></p>
+          <ol>
+            <li>The delivery boy starts from <b>Home</b> (the restaurant).</li>
+            <li>The customer's location is treated as the <b>destination</b>.</li>
+            <li>The game map is represented as a <b>graph</b>.</li>
+            <li>Roads between locations are represented as <b>connections (edges)</b> between nodes.</li>
+            <li>Each road between two locations has a <b>cost</b> — its distance in km.</li>
+            <li>Dijkstra's Algorithm calculates the <b>lowest-cost path</b> from Home to the customer.</li>
+            <li>The game uses that path to determine the most <b>efficient route</b> for the delivery.</li>
+            <li>A bigger, more tangled city (unlocked as you level up) means more possible routes — and a bigger reward for trusting the algorithm over guessing!</li>
+          </ol>
+
+          <div class="route-visual" id="routeVisual">Home → Road → Road → Road → Customer</div>
+
+          <p class="edu-body-sub">General idea, step by step:</p>
+          <ol>
+            <li>Give the start node distance <code>0</code> and every other node distance <code>∞</code> (unknown).</li>
+            <li>Repeatedly pick the <b>unvisited</b> node with the smallest known distance — that distance is now final.</li>
+            <li>Look at all roads leaving that node. If going through it makes a neighbor's distance <b>shorter</b>, update the neighbor's distance and remember "came from" that node.</li>
+            <li>Mark the node visited and repeat until the destination is visited.</li>
+            <li>Walk backwards using the "came from" links to rebuild the shortest path — this is the <span style="color:var(--path-dark); font-weight:700;">green highlighted route</span> you see on the map.</li>
+          </ol>
+          <p id="eduExample"><i>Place an order and run Dijkstra to see this explained with your current map!</i></p>
+        </div>
+      </details>
+    </div>
+
+  </div>
+</div>
+
+<footer class="credits">Built for learning graphs &amp; shortest-path algorithms · click "New Order" to begin 🚦</footer>
+
+<!-- RESULT MODAL -->
+<div class="result-modal-bg" id="resultModalBg">
+  <div class="result-modal">
+    <div class="completed-banner">✅ Delivery Completed!</div>
+    <h2 id="resultTitle">Delivered! 🎉</h2>
+    <div class="stars" id="resultStars">⭐⭐⭐</div>
+    <div class="result-row"><span>Your path</span><b id="resultYourPath">0 km</b></div>
+    <div class="result-row"><span>Shortest possible</span><b id="resultBestPath">0 km</b></div>
+    <hr class="result-divider">
+    <div class="result-row"><span>📦 Delivery bonus</span><b id="resultBase">+0</b></div>
+    <div class="result-row"><span>🧭 Route efficiency bonus</span><b id="resultEfficiency">+0</b></div>
+    <div class="result-row"><span>⏱️ Time bonus</span><b id="resultTimeBonus">+0</b></div>
+    <div class="result-row result-total"><span>Total score earned</span><b id="resultPoints">+0</b></div>
+    <div class="result-row"><span>🪙 Coins earned</span><b id="resultCoins">+0</b></div>
+    <div class="result-row"><span>Deliveries this level</span><b id="resultDeliveryCount">0/5</b></div>
+    <button class="btn btn-dijkstra" style="margin-top:16px;" id="btnCloseResult">Next Delivery ➜</button>
+  </div>
+</div>
+
+<!-- MILESTONE MODAL (shown when the player completes all deliveries for a level) -->
+<div class="result-modal-bg" id="milestoneModalBg">
+  <div class="milestone-card">
+    <h2 id="milestoneTitle">🏆 Level Complete!</h2>
+    <div class="sub" id="milestoneSub">All deliveries done for this level — nice riding!</div>
+    <div class="milestone-stats">
+      <div class="counter"><div class="n" id="msDeliveries">0</div><div class="l">deliveries</div></div>
+      <div class="counter"><div class="n" id="msScore">0</div><div class="l">total score</div></div>
+      <div class="counter"><div class="n" id="msCoins">0</div><div class="l">coins</div></div>
+    </div>
+    <div class="milestone-actions">
+      <button class="btn btn-manual" id="btnKeepRiding">Next Level ➜</button>
+      <button class="btn btn-ghost" id="btnNewCity">Start New City</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   DELIVERY BOY PATHFINDER — GAME LOGIC
+   Sections:
+     1. Graph Generation
+     2. Rendering (SVG)
+     3. Order System
+     4. Dijkstra's Algorithm
+     5. Step-by-step Visualization / Animation
+     6. Bike Movement Animation
+     7. Manual Mode
+     8. Scoring
+     9. UI Wiring / Init
+   ===================================================================== */
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const VB_W = 800, VB_H = 520;
+
+const NAME_POOL = ["Shop","Market","Park","School","Cafe","Library","Bakery",
+                    "Mall","Station","Bridge","Plaza","Garden","Tower","Cinema","Clinic"];
+
+const DELIVERIES_PER_LEVEL = 5; // how many completed deliveries it takes to level up
+
+// ---------------------------------------------------------------------
+// Global game state
+// ---------------------------------------------------------------------
+const state = {
+  nodes: [],          // {id, name, x, y}
+  edges: [],          // {a, b, w}
+  adj: {},            // id -> [{to, w}]
+  current: 0,         // node id where the bike currently is
+  customer: null,     // node id with the active order
+  mode: null,          // 'dijkstra-running' | 'dijkstra-riding' | 'manual' | null
+  manualPath: [],
+  manualDistance: 0,
+  shortestPath: [],
+  shortestDistance: 0,
+  score: 0,
+  coins: 0,
+  level: 1,
+  deliveries: 0,        // lifetime total, completed deliveries across the whole session
+  levelDeliveries: 0,   // completed deliveries within the CURRENT level (drives the X/5 HUD + level-ups)
+  pendingMilestone: false,
+  orderStartedAt: null, // Date.now() timestamp — drives the live "Time" HUD + time bonus
+};
+let timerInterval = null;
+
+const svg = document.getElementById('mapSvg');
+
+// ---------------------------------------------------------------------
+// ROOT-CAUSE MOBILE FIX: the SVG map uses viewBox="0 0 800 520" and is
+// stretched to fit any container width via CSS (width:100%). On a phone
+// the rendered width might be ~340px, meaning every "user unit" in the
+// SVG shrinks to roughly 0.42 real pixels — so a 12px font-size attribute
+// was rendering at ~5px on screen: unreadable. Instead of guessing at a
+// single "mobile" font size, we measure the *actual* current on-screen
+// scale factor and size every SVG element so it always ends up the same
+// physical pixel size, on any phone, tablet, or desktop window.
+// ---------------------------------------------------------------------
+let mapScale = 1;
+function computeMapScale(){
+  const w = svg.getBoundingClientRect().width;
+  mapScale = (w && isFinite(w) && w > 0) ? (w / VB_W) : 1;
+  return mapScale;
+}
+function px(onScreenPixels){ return onScreenPixels / mapScale; } // convert a desired screen size into SVG user units
+
+// ---------------------------------------------------------------------
+// SECTION 1: GRAPH GENERATION
+// Randomly place 8-12 nodes, then connect them like a road network:
+// each node links to its nearest couple of neighbors, we guarantee the
+// whole map is reachable, and we sprinkle a few extra roads for loops.
+// ---------------------------------------------------------------------
+function dist(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function generateMap(level = 1){
+  // Base city size grows slowly with level (8..12 at level 1, up to 12..16
+  // by level 5+), and we cap it so the map never gets unreadable.
+  const growth = Math.min(4, Math.floor((level - 1) / 2));
+  const n = Math.min(16, 8 + growth + Math.floor(Math.random() * 5)); // e.g. 8..12 -> up to 12..16
+  const margin = 60;
+  const nodes = [];
+
+  // Rejection-sample positions so nodes don't overlap
+  for(let i = 0; i < n; i++){
+    let tries = 0, pos;
+    do{
+      pos = {
+        x: margin + Math.random() * (VB_W - margin*2),
+        y: margin + 20 + Math.random() * (VB_H - margin*2 - 20)
+      };
+      tries++;
+    } while(tries < 300 && nodes.some(p => dist(p,pos) < 78));
+    nodes.push(pos);
+  }
+
+  // Names: node 0 is always "Home" (the shop the delivery boy starts from)
+  const pool = [...NAME_POOL].sort(() => Math.random()-0.5);
+  const namedNodes = nodes.map((p, i) => ({
+    id: i,
+    name: i === 0 ? "Home" : pool[(i-1) % pool.length] + (i > pool.length ? " "+i : ""),
+    x: p.x, y: p.y
+  }));
+
+  // Build candidate edges: connect each node to its k nearest neighbors
+  const edgesSet = new Map(); // key "a-b" (a<b) -> weight
+  const k = 3;
+  namedNodes.forEach(node => {
+    const others = namedNodes
+      .filter(o => o.id !== node.id)
+      .map(o => ({ o, d: dist(node, o) }))
+      .sort((a,b) => a.d - b.d)
+      .slice(0, k);
+    others.forEach(({o,d}) => {
+      const key = [node.id,o.id].sort((a,b)=>a-b).join('-');
+      if(!edgesSet.has(key)) edgesSet.set(key, Math.max(1, Math.round(d/12)));
+    });
+  });
+
+  // Ensure the graph is fully connected (BFS + connect isolated components)
+  function buildAdj(edgeMap){
+    const adj = {};
+    namedNodes.forEach(nd => adj[nd.id] = []);
+    edgeMap.forEach((w, key) => {
+      const [a,b] = key.split('-').map(Number);
+      adj[a].push({to:b, w});
+      adj[b].push({to:a, w});
+    });
+    return adj;
+  }
+  function components(adj){
+    const seen = new Set(); const comps = [];
+    namedNodes.forEach(nd => {
+      if(seen.has(nd.id)) return;
+      const queue = [nd.id]; const comp = [];
+      seen.add(nd.id);
+      while(queue.length){
+        const cur = queue.shift(); comp.push(cur);
+        adj[cur].forEach(e => { if(!seen.has(e.to)){ seen.add(e.to); queue.push(e.to); } });
+      }
+      comps.push(comp);
+    });
+    return comps;
+  }
+  let adjTemp = buildAdj(edgesSet);
+  let comps = components(adjTemp);
+  while(comps.length > 1){
+    // connect the closest pair of nodes between the first two components
+    const [c1, c2] = comps;
+    let best = null;
+    c1.forEach(i => c2.forEach(j => {
+      const d = dist(namedNodes[i], namedNodes[j]);
+      if(!best || d < best.d) best = {i,j,d};
+    }));
+    const key = [best.i,best.j].sort((a,b)=>a-b).join('-');
+    edgesSet.set(key, Math.max(1, Math.round(best.d/12)));
+    adjTemp = buildAdj(edgesSet);
+    comps = components(adjTemp);
+  }
+
+  // Sprinkle a few extra random roads for realistic loops/shortcuts —
+  // higher levels get relatively fewer shortcuts, making the shortest
+  // path harder to guess by eye and rewarding actually running Dijkstra.
+  let extra = Math.max(1, Math.floor(n/3) - Math.floor((level - 1) / 3));
+  let guard = 0;
+  while(extra > 0 && guard < 200){
+    guard++;
+    const a = Math.floor(Math.random()*n), b = Math.floor(Math.random()*n);
+    if(a===b) continue;
+    const key = [a,b].sort((x,y)=>x-y).join('-');
+    if(edgesSet.has(key)) continue;
+    const d = dist(namedNodes[a], namedNodes[b]);
+    if(d > 260) continue; // keep roads reasonably local
+    edgesSet.set(key, Math.max(1, Math.round(d/12)));
+    extra--;
+  }
+
+  const edges = [...edgesSet.entries()].map(([key,w]) => {
+    const [a,b] = key.split('-').map(Number);
+    return {a,b,w};
+  });
+
+  state.nodes = namedNodes;
+  state.edges = edges;
+  state.adj = buildAdj(edgesSet);
+  state.current = 0;
+  state.customer = null;
+}
+
+// ---------------------------------------------------------------------
+// SECTION 2: RENDERING
+// Draw roads (lines + weight labels) then locations (circles + labels)
+// then the bike marker on top. Re-render whenever state visibly changes.
+// ---------------------------------------------------------------------
+function clearSvg(){ while(svg.firstChild) svg.removeChild(svg.firstChild); }
+
+function nodeById(id){ return state.nodes.find(n => n.id === id); }
+
+function svgEl(tag, attrs){
+  const el = document.createElementNS(SVG_NS, tag);
+  for(const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+function renderMap(){
+  computeMapScale();
+  // Expose the scale as a CSS custom property on the SVG root. Every size-
+  // related CSS rule below reads it via calc(Npx / var(--map-scale)), so
+  // road width, node radius, labels, the pin, and the bike all render at a
+  // constant *physical* pixel size no matter how small the map is drawn —
+  // while still respecting normal CSS cascade (e.g. the highlighted
+  // shortest-path road can stay visibly thicker than a normal road).
+  svg.style.setProperty('--map-scale', mapScale);
+  clearSvg();
+
+  // subtle map "grid" backdrop for a city-block feel
+  const grid = svgEl('g', {opacity:0.5, class:'map-grid-lines'});
+  for(let x=0; x<=VB_W; x+=40) grid.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:VB_H,stroke:'var(--map-grid)'}));
+  for(let y=0; y<=VB_H; y+=40) grid.appendChild(svgEl('line',{x1:0,y1:y,x2:VB_W,y2:y,stroke:'var(--map-grid)'}));
+  svg.appendChild(grid);
+
+  // roads
+  state.edges.forEach(e => {
+    const a = nodeById(e.a), b = nodeById(e.b);
+    const line = svgEl('line', {
+      x1:a.x, y1:a.y, x2:b.x, y2:b.y,
+      class:'edge-line', 'data-edge': e.a+'-'+e.b
+    });
+    svg.appendChild(line);
+
+    const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+    const bw = px(24), bh = px(19);
+    const bg = svgEl('rect', {x:mx-bw/2, y:my-bh/2, width:bw, height:bh, rx:px(5), class:'edge-weight-bg'});
+    const txt = svgEl('text', {x:mx, y:my+px(4), 'text-anchor':'middle', class:'edge-weight-text'});
+    txt.textContent = e.w;
+    svg.appendChild(bg); svg.appendChild(txt);
+  });
+
+  // nodes
+  state.nodes.forEach(nd => {
+    const isHome = nd.id === 0;
+    const isCurrent = nd.id === state.current;
+    const circle = svgEl('circle', {
+      cx:nd.x, cy:nd.y, r:16,
+      class:'node-circle' + (isHome?' is-home':'') + (isCurrent?' is-current':''),
+      'data-node': nd.id
+    });
+    svg.appendChild(circle);
+
+    const label = svgEl('text', {x:nd.x, y:nd.y - px(24), 'text-anchor':'middle', class:'node-label'});
+    label.textContent = nd.name;
+    svg.appendChild(label);
+  });
+
+  // customer pin
+  if(state.customer !== null){
+    const c = nodeById(state.customer);
+    const pin = svgEl('text', {x:c.x, y:c.y - px(36), 'text-anchor':'middle', class:'pin-pulse map-pin'});
+    pin.textContent = '📍';
+    svg.appendChild(pin);
+  }
+
+  // bike marker
+  const cur = nodeById(state.current);
+  const bike = svgEl('text', {
+    x:cur.x, y:cur.y + px(6), 'text-anchor':'middle', id:'bikeMarker', class:'bike-marker'
+  });
+  bike.textContent = '🛵';
+  svg.appendChild(bike);
+}
+
+// Re-measure and redraw when the map's on-screen size changes (resize,
+// orientation flip, or the sidebar collapsing under it on mobile) so
+// text/markers never end up too small — restores any in-progress
+// highlighting afterwards so the player doesn't lose their place.
+let resizeTimer = null;
+function handleMapResize(){
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    renderMap();
+    if(state.shortestPath && state.shortestPath.length > 1) drawPathHighlight(state.shortestPath);
+    if(state.mode === 'manual') highlightManualNeighbors();
+  }, 180);
+}
+window.addEventListener('resize', handleMapResize);
+window.addEventListener('orientationchange', handleMapResize);
+
+function getEdgeWeight(a,b){
+  const found = state.edges.find(e => (e.a===a&&e.b===b)||(e.a===b&&e.b===a));
+  return found ? found.w : null;
+}
+
+// ---------------------------------------------------------------------
+// SOUND ENGINE — small procedural beeps via Web Audio, so there are no
+// external audio files to fetch (nothing to fail/lag on a slow mobile
+// connection). The AudioContext is created lazily on the first user tap
+// (the "Start Delivering" button) because iOS Safari blocks audio from
+// starting before a genuine user gesture.
+// ---------------------------------------------------------------------
+let audioCtx = null;
+let soundOn = true;
+
+function unlockAudio(){
+  if(!audioCtx){
+    try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e){ audioCtx = null; }
+  } else if(audioCtx.state === 'suspended'){
+    audioCtx.resume();
+  }
+}
+
+function beep(freq, duration, type = 'sine', delay = 0, gainPeak = 0.18){
+  if(!soundOn || !audioCtx) return;
+  const t0 = audioCtx.currentTime + delay;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type; osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(gainPeak, t0 + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(t0); osc.stop(t0 + duration + 0.02);
+}
+
+const sfx = {
+  click:   () => beep(520, 0.08, 'square'),
+  order:   () => { beep(660, 0.12, 'sine'); beep(880, 0.16, 'sine', 0.1); },
+  move:    () => beep(340, 0.06, 'triangle', 0, 0.08),
+  visit:   () => beep(420, 0.05, 'square', 0, 0.06),
+  success3:() => { beep(523,0.12,'sine'); beep(659,0.12,'sine',0.1); beep(784,0.22,'sine',0.2); },
+  success2:() => { beep(523,0.12,'sine'); beep(659,0.18,'sine',0.1); },
+  success1:() => { beep(392,0.18,'sine'); },
+  levelUp: () => { beep(523,0.1,'sine'); beep(659,0.1,'sine',0.1); beep(784,0.1,'sine',0.2); beep(1046,0.25,'sine',0.3); },
+};
+
+function toggleSound(){
+  soundOn = !soundOn;
+  unlockAudio();
+  document.getElementById('btnSound').textContent = soundOn ? '🔊' : '🔇';
+  if(soundOn) sfx.click(); else stopEngine(true);
+}
+
+// ---------------------------------------------------------------------
+// SCOOTER ENGINE SOUND — a single persistent oscillator/gain pair that
+// fades in when the bike starts moving and fades out when it stops.
+// engineNodes is a guard so a second "start" call while already running
+// just reuses the existing sound instead of layering a duplicate on top.
+// ---------------------------------------------------------------------
+let engineNodes = null;
+
+function startEngine(){
+  if(!soundOn || !audioCtx || engineNodes) return; // already running (or muted) — don't restart/overlap
+  const t0 = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const lfo = audioCtx.createOscillator();     // gentle pitch wobble for an "engine" feel
+  const lfoGain = audioCtx.createGain();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(110, t0);
+  lfo.type = 'sine'; lfo.frequency.setValueAtTime(6, t0);
+  lfoGain.gain.setValueAtTime(4, t0);
+  lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(0.05, t0 + 0.15); // moderate volume, smooth fade-in
+
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(t0); lfo.start(t0);
+  engineNodes = {osc, lfo, gain};
+}
+
+function stopEngine(immediate){
+  if(!engineNodes || !audioCtx) { engineNodes = null; return; }
+  const { osc, lfo, gain } = engineNodes;
+  const t0 = audioCtx.currentTime;
+  const rampTime = immediate ? 0.05 : 0.18;
+  gain.gain.cancelScheduledValues(t0);
+  gain.gain.setValueAtTime(gain.gain.value, t0);
+  gain.gain.linearRampToValueAtTime(0, t0 + rampTime); // smooth fade-out, no abrupt cut
+  osc.stop(t0 + rampTime + 0.02);
+  lfo.stop(t0 + rampTime + 0.02);
+  engineNodes = null;
+}
+
+// ---------------------------------------------------------------------
+// LIVE DELIVERY TIMER — counts up from when an order is accepted, shown
+// in the HUD, and used for the delivery's time bonus. This is an elapsed
+// stopwatch rather than a countdown-to-zero fail timer, so slower play
+// is never punished with a sudden game over — it just earns a smaller
+// time bonus (kept consistent with "make progression fair, not unfair").
+// ---------------------------------------------------------------------
+function startOrderTimer(){
+  stopOrderTimer();
+  state.orderStartedAt = Date.now();
+  document.getElementById('hudTime').textContent = '0s';
+  timerInterval = setInterval(() => {
+    const secs = Math.floor((Date.now() - state.orderStartedAt) / 1000);
+    document.getElementById('hudTime').textContent = secs + 's';
+  }, 500);
+}
+function stopOrderTimer(){
+  if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
+}
+function elapsedOrderSeconds(){
+  return state.orderStartedAt ? (Date.now() - state.orderStartedAt) / 1000 : 0;
+}
+
+// ---------------------------------------------------------------------
+// SECTION 3: ORDER SYSTEM
+// ---------------------------------------------------------------------
+function newOrder(){
+  resetDeliveryUI();
+  let choices = state.nodes.filter(n => n.id !== state.current);
+  const customer = choices[Math.floor(Math.random()*choices.length)];
+  state.customer = customer.id;
+  renderMap();
+  sfx.order();
+  startOrderTimer();
+
+  const toast = document.getElementById('orderToast');
+  toast.textContent = `📮 Customer at ${customer.name} ordered food!`;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2600);
+
+  document.getElementById('btnDijkstra').disabled = false;
+  document.getElementById('btnManual').disabled = false;
+  document.getElementById('btnNewOrder').disabled = true;
+  document.getElementById('btnNewOrder').classList.remove('attn');
+  document.getElementById('statBest').textContent = '–';
+
+  updateEduExample();
+}
+
+// A little floating "+N" that rises from the map card, for visual
+// feedback right when a delivery is scored.
+function showFloatingPoints(points){
+  const card = document.getElementById('mapCard');
+  const span = document.createElement('span');
+  span.className = 'float-pts';
+  span.textContent = `+${points}`;
+  span.style.left = '50%';
+  span.style.top = '46%';
+  card.appendChild(span);
+  setTimeout(() => span.remove(), 1200);
+}
+
+function resetDeliveryUI(){
+  state.manualPath = [];
+  state.manualDistance = 0;
+  state.shortestPath = [];
+  state.shortestDistance = 0;
+  document.getElementById('statDistance').textContent = '0';
+  document.getElementById('statTime').textContent = '0';
+  document.getElementById('tableWrap').innerHTML =
+    '<div class="dtable-empty">Place an order and click "Find Shortest Path" to watch this fill in.</div>';
+  document.getElementById('manualHint').classList.remove('show');
+  exitManualMode();
+}
+
+// ---------------------------------------------------------------------
+// SECTION 4: DIJKSTRA'S ALGORITHM
+// Produces both the final result AND a list of "steps" describing what
+// happened at each moment, so section 5 can replay it visually.
+// ---------------------------------------------------------------------
+function runDijkstra(startId, endId){
+  const dist = {}, prev = {}, visited = {};
+  state.nodes.forEach(n => { dist[n.id] = Infinity; prev[n.id] = null; visited[n.id] = false; });
+  dist[startId] = 0;
+
+  const steps = []; // recorded for animation playback
+
+  while(true){
+    // pick the unvisited node with the smallest tentative distance
+    let u = null, best = Infinity;
+    state.nodes.forEach(n => {
+      if(!visited[n.id] && dist[n.id] < best){ best = dist[n.id]; u = n.id; }
+    });
+    if(u === null) break; // remaining nodes are unreachable
+    visited[u] = true;
+    steps.push({type:'visit', node:u, dist:dist[u]});
+    if(u === endId) break;
+
+    (state.adj[u] || []).forEach(edge => {
+      if(visited[edge.to]) return;
+      const alt = dist[u] + edge.w;
+      if(alt < dist[edge.to]){
+        dist[edge.to] = alt;
+        prev[edge.to] = u;
+        steps.push({type:'relax', from:u, to:edge.to, newDist:alt});
+      }
+    });
+  }
+
+  // rebuild path end -> start
+  const path = [];
+  let cur = endId;
+  while(cur !== null){ path.unshift(cur); cur = prev[cur]; }
+  const reachable = path[0] === startId;
+
+  return { dist, prev, steps, path: reachable ? path : [], total: reachable ? dist[endId] : Infinity };
+}
+
+// ---------------------------------------------------------------------
+// SECTION 5: STEP-BY-STEP VISUALIZATION
+// Replays the recorded Dijkstra steps with delays, updating the SVG
+// node colors and the live distance table so students can follow along.
+// ---------------------------------------------------------------------
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+
+function initTable(startId){
+  const rows = state.nodes.map(n => `
+    <tr id="trow-${n.id}">
+      <td>${n.name}</td>
+      <td id="tdist-${n.id}">${n.id===startId ? 0 : '∞'}</td>
+      <td id="tprev-${n.id}">–</td>
+    </tr>`).join('');
+  document.getElementById('tableWrap').innerHTML = `
+    <table class="dtable">
+      <thead><tr><th>Location</th><th>Distance</th><th>Via</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function setTableCell(nodeId, dist, prevId){
+  const d = document.getElementById(`tdist-${nodeId}`);
+  const p = document.getElementById(`tprev-${nodeId}`);
+  if(d) d.textContent = (dist===Infinity ? '∞' : dist);
+  if(p && prevId!==undefined) p.textContent = prevId===null ? '–' : nodeById(prevId).name;
+}
+
+async function playDijkstraAnimation(startId, endId){
+  document.getElementById('btnDijkstra').disabled = true;
+  document.getElementById('btnManual').disabled = true;
+  state.mode = 'dijkstra-running';
+
+  initTable(startId);
+  const result = runDijkstra(startId, endId);
+
+  // clear previous visited styling
+  state.nodes.forEach(n => {
+    const c = svg.querySelector(`[data-node="${n.id}"]`);
+    c.classList.remove('is-visiting','is-visited');
+  });
+
+  for(const step of result.steps){
+    if(step.type === 'visit'){
+      const circle = svg.querySelector(`[data-node="${step.node}"]`);
+      circle.classList.add('is-visiting');
+      sfx.visit();
+      const row = document.getElementById(`trow-${step.node}`);
+      row && row.classList.add('row-visiting');
+      await sleep(500);
+      circle.classList.remove('is-visiting');
+      circle.classList.add('is-visited');
+      row && row.classList.remove('row-visiting');
+      row && row.classList.add('row-visited');
+    } else if(step.type === 'relax'){
+      const line = svg.querySelector(`[data-edge="${step.from}-${step.to}"], [data-edge="${step.to}-${step.from}"]`);
+      if(line){
+        line.style.stroke = 'var(--accent)';
+        await sleep(220);
+        line.style.stroke = '';
+      }
+      setTableCell(step.to, step.newDist, step.from);
+      await sleep(160);
+    }
+  }
+
+  state.shortestPath = result.path;
+  state.shortestDistance = result.total;
+  document.getElementById('statBest').textContent = isFinite(result.total) ? result.total : '–';
+
+  // draw the final shortest path in green
+  drawPathHighlight(result.path);
+
+  updateEduExample(result);
+
+  state.mode = null;
+  document.getElementById('btnManual').disabled = true; // dijkstra already chosen for this order
+  if(result.path.length > 1){
+    await animateBikeAlongPath(result.path, 'dijkstra');
+  }
+}
+
+function drawPathHighlight(path){
+  for(let i=0; i<path.length-1; i++){
+    const line = svg.querySelector(`[data-edge="${path[i]}-${path[i+1]}"], [data-edge="${path[i+1]}-${path[i]}"]`);
+    if(line) line.classList.add('path-line');
+  }
+}
+
+function clearPathHighlight(){
+  svg.querySelectorAll('.edge-line').forEach(l => l.classList.remove('path-line'));
+}
+
+// ---------------------------------------------------------------------
+// SECTION 6: BIKE MOVEMENT ANIMATION
+// Smoothly interpolates the bike emoji along each edge of a path,
+// updating "distance covered" and "time" counters live.
+// ---------------------------------------------------------------------
+function animateSegment(bike, from, to, weight){
+  return new Promise(resolve => {
+    const duration = Math.max(350, weight * 160); // speed proportional to distance
+    const start = performance.now();
+    function frame(now){
+      const t = Math.min(1, (now - start) / duration);
+      const x = from.x + (to.x - from.x) * t;
+      const y = from.y + (to.y - from.y) * t;
+      bike.setAttribute('x', x);
+      bike.setAttribute('y', y + 6);
+      if(t < 1) requestAnimationFrame(frame);
+      else resolve();
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+async function animateBikeAlongPath(path, sourceMode){
+  const bike = document.getElementById('bikeMarker');
+  let coveredDistance = 0, coveredTime = 0;
+  document.getElementById('statDistance').textContent = '0';
+  document.getElementById('statTime').textContent = '0';
+
+  startEngine(); // one continuous hum for the whole ride, not retriggered per road
+
+  for(let i=0; i<path.length-1; i++){
+    const a = nodeById(path[i]), b = nodeById(path[i+1]);
+    const w = getEdgeWeight(path[i], path[i+1]);
+    await animateSegment(bike, a, b, w);
+    coveredDistance += w;
+    coveredTime += Math.round(w * 1.5); // simple time model: 1.5 min per km
+    document.getElementById('statDistance').textContent = coveredDistance;
+    document.getElementById('statTime').textContent = coveredTime;
+    state.current = path[i+1];
+  }
+
+  stopEngine();
+  finishDelivery(sourceMode, coveredDistance);
+}
+
+// ---------------------------------------------------------------------
+// SECTION 7: MANUAL MODE
+// Player clicks adjacent, highlighted nodes to move step by step,
+// building their own path to compare against Dijkstra's shortest one.
+// ---------------------------------------------------------------------
+function enterManualMode(){
+  state.mode = 'manual';
+  state.manualPath = [state.current];
+  state.manualDistance = 0;
+  document.getElementById('btnDijkstra').disabled = true;
+  document.getElementById('btnManual').disabled = true;
+  document.getElementById('manualHint').classList.add('show');
+  document.getElementById('manualPanel').classList.add('show');
+  highlightManualNeighbors();
+}
+
+function exitManualMode(){
+  if(state.mode === 'manual') state.mode = null;
+  document.getElementById('manualHint').classList.remove('show');
+  document.getElementById('manualPanel').classList.remove('show');
+  document.getElementById('roadButtons').innerHTML = '';
+  svg.querySelectorAll('.node-circle.is-clickable').forEach(c => c.classList.remove('is-clickable'));
+}
+
+// Manual navigation is driven by a list of "road buttons" — one per
+// road leaving the current location — so it works great on touch
+// screens too. Clicking a button rides the bike down that road.
+function highlightManualNeighbors(){
+  svg.querySelectorAll('.node-circle').forEach(c => c.classList.remove('is-clickable'));
+  const neighbors = (state.adj[state.current] || []).slice().sort((a,b) => a.w - b.w);
+
+  neighbors.forEach(edge => {
+    const circle = svg.querySelector(`[data-node="${edge.to}"]`);
+    if(circle) circle.classList.add('is-clickable'); // still glow on the map for reference
+  });
+
+  const container = document.getElementById('roadButtons');
+  container.innerHTML = '';
+  if(neighbors.length === 0){
+    container.innerHTML = '<div class="dtable-empty">No roads leave this spot!</div>';
+    return;
+  }
+  neighbors.forEach(edge => {
+    const target = nodeById(edge.to);
+    const btn = document.createElement('button');
+    btn.className = 'road-btn';
+    btn.innerHTML = `<span>🚦 ${target.name}${edge.to === state.customer ? ' 📍' : ''}</span><span class="rb-dist">${edge.w} km</span>`;
+    btn.onclick = () => manualMoveTo(edge.to, edge.w);
+    container.appendChild(btn);
+  });
+}
+
+async function manualMoveTo(targetId, weight){
+  if(state.mode !== 'manual') return;
+  svg.querySelectorAll('.node-circle.is-clickable').forEach(c => c.classList.remove('is-clickable'));
+  document.getElementById('roadButtons').querySelectorAll('.road-btn').forEach(b => b.disabled = true);
+
+  const bike = document.getElementById('bikeMarker');
+  const from = nodeById(state.current), to = nodeById(targetId);
+  const line = svg.querySelector(`[data-edge="${state.current}-${targetId}"], [data-edge="${targetId}-${state.current}"]`);
+  if(line) line.classList.add('path-line');
+
+  startEngine();
+  await animateSegment(bike, from, to, weight);
+  stopEngine();
+
+  state.manualDistance += weight;
+  state.manualPath.push(targetId);
+  state.current = targetId;
+
+  document.getElementById('statDistance').textContent = state.manualDistance;
+  document.getElementById('statTime').textContent = Math.round(state.manualDistance * 1.5);
+
+  // refresh node styling (current position)
+  svg.querySelectorAll('.node-circle').forEach(c => c.classList.remove('is-current'));
+  svg.querySelector(`[data-node="${targetId}"]`).classList.add('is-current');
+
+  if(targetId === state.customer){
+    finishDelivery('manual', state.manualDistance);
+  } else {
+    highlightManualNeighbors();
+  }
+}
+
+// ---------------------------------------------------------------------
+// SECTION 8: SCORING
+// Compares the player's path (manual or Dijkstra) to the true shortest
+// path, awards stars + points, and levels the player up over time.
+// ---------------------------------------------------------------------
+async function finishDelivery(sourceMode, traveledDistance){
+  exitManualMode();
+  stopOrderTimer();
+  document.getElementById('btnNewOrder').disabled = false;
+
+  // We always need the true shortest distance for comparison, even if
+  // the player used manual mode (silently computed, not animated).
+  let bestDistance = state.shortestDistance;
+  if(!isFinite(bestDistance) || bestDistance === 0){
+    const silent = runDijkstra(state.manualPath[0] ?? traveledFrom(sourceMode), state.customer);
+    bestDistance = silent.total;
+    state.shortestDistance = bestDistance;
+  }
+  document.getElementById('statBest').textContent = isFinite(bestDistance) ? bestDistance : '–';
+
+  // --- DYNAMIC SCORE BREAKDOWN -----------------------------------------
+  // 1) Delivery bonus: a flat reward simply for completing the delivery.
+  // 2) Route efficiency bonus: bigger the closer traveledDistance is to
+  //    the true Dijkstra shortest distance (this also sets the star rating).
+  // 3) Time bonus: rewards finishing quickly relative to a "par" time
+  //    derived from the shortest path's own length (not a fail-timer —
+  //    slow play just earns a smaller bonus, never a penalty).
+  const ratio = bestDistance > 0 ? (traveledDistance - bestDistance) / bestDistance : 0;
+  let stars, efficiencyBonus;
+  if(ratio <= 0.0001){ stars = 3; efficiencyBonus = 70; }
+  else if(ratio <= 0.25){ stars = 2; efficiencyBonus = Math.max(25, Math.round(55 - ratio*100)); }
+  else { stars = 1; efficiencyBonus = Math.max(5, Math.round(30 - ratio*30)); }
+
+  const baseBonus = 20; // flat "delivery completed" reward
+  const elapsedSecs = elapsedOrderSeconds();
+  const parSecs = Math.max(3, bestDistance * 3); // ~3 real seconds per shortest-path km = "good" pace
+  let timeBonus;
+  if(elapsedSecs <= parSecs * 1.2) timeBonus = 15;
+  else if(elapsedSecs <= parSecs * 1.6) timeBonus = 7;
+  else timeBonus = 0;
+
+  const points = baseBonus + efficiencyBonus + timeBonus;
+  const coinsEarned = Math.max(3, Math.round(points / 5));
+
+  state.score += points;
+  state.coins += coinsEarned;
+  state.deliveries += 1;
+  state.levelDeliveries += 1;
+
+  document.getElementById('hudScore').textContent = state.score;
+  document.getElementById('hudCoins').textContent = state.coins;
+  document.getElementById('hudDeliveries').textContent = `${state.levelDeliveries}/${DELIVERIES_PER_LEVEL}`;
+
+  if(stars === 3) sfx.success3(); else if(stars === 2) sfx.success2(); else sfx.success1();
+  showFloatingPoints(points);
+
+  showResultModal(sourceMode, traveledDistance, bestDistance, stars, {baseBonus, efficiencyBonus, timeBonus, points, coinsEarned});
+
+  // --- LEVEL PROGRESSION -------------------------------------------------
+  // Leveling up is driven by the delivery counter itself (complete
+  // DELIVERIES_PER_LEVEL orders → next level), not a separate score
+  // threshold, so "Deliveries: X/5" is a real gameplay counter and not
+  // just a cosmetic readout. Leveling up unlocks a fresh, slightly bigger
+  // and trickier city (more locations, relatively fewer shortcut roads)
+  // as the difficulty ramp — kept tied to the pathfinding concept itself
+  // rather than an unrelated traffic/fuel system.
+  const leveledUp = state.levelDeliveries >= DELIVERIES_PER_LEVEL;
+  state.pendingMilestone = leveledUp;
+  if(leveledUp){
+    state.level += 1;
+    state.levelDeliveries = 0;
+    document.getElementById('hudLevel').textContent = state.level;
+    document.getElementById('hudDeliveries').textContent = `0/${DELIVERIES_PER_LEVEL}`;
+  }
+}
+
+function showMilestone(){
+  document.getElementById('milestoneTitle').textContent = `🏆 Level ${state.level - 1} Complete!`;
+  document.getElementById('milestoneSub').textContent = `Level ${state.level} unlocked — a bigger, trickier city is waiting.`;
+  document.getElementById('msDeliveries').textContent = state.deliveries;
+  document.getElementById('msScore').textContent = state.score;
+  document.getElementById('msCoins').textContent = state.coins;
+  document.getElementById('milestoneModalBg').classList.add('show');
+  sfx.levelUp();
+  const t = document.getElementById('levelupToast');
+  t.textContent = `📈 Level ${state.level}! A bigger, trickier city just unlocked.`;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+  generateMap(state.level);
+  renderMap();
+}
+
+function traveledFrom(){ return state.nodes[0].id; } // fallback safety
+
+function showResultModal(sourceMode, yours, best, stars, breakdown){
+  document.getElementById('resultTitle').textContent =
+    sourceMode === 'dijkstra' ? "Delivered with Dijkstra! 🧠" : "Delivered manually! 🕹️";
+  document.getElementById('resultStars').textContent = '⭐'.repeat(stars) + '☆'.repeat(3-stars);
+  document.getElementById('resultYourPath').textContent = `${yours} km`;
+  document.getElementById('resultBestPath').textContent = `${best} km`;
+  document.getElementById('resultBase').textContent = `+${breakdown.baseBonus}`;
+  document.getElementById('resultEfficiency').textContent = `+${breakdown.efficiencyBonus}`;
+  document.getElementById('resultTimeBonus').textContent = `+${breakdown.timeBonus}`;
+  document.getElementById('resultPoints').textContent = `+${breakdown.points}`;
+  document.getElementById('resultCoins').textContent = `+${breakdown.coinsEarned}`;
+  document.getElementById('resultDeliveryCount').textContent = `${state.levelDeliveries}/${DELIVERIES_PER_LEVEL}`;
+  document.getElementById('resultModalBg').classList.add('show');
+}
+
+function closeResultModal(){
+  document.getElementById('resultModalBg').classList.remove('show');
+  state.customer = null;
+  clearPathHighlight();
+  renderMap();
+  document.getElementById('btnDijkstra').disabled = true;
+  document.getElementById('btnManual').disabled = true;
+
+  if(state.pendingMilestone){
+    state.pendingMilestone = false;
+    setTimeout(showMilestone, 350);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Educational panel: keep the explanation grounded in the live example
+// ---------------------------------------------------------------------
+function updateEduExample(result){
+  const startName = nodeById(state.current)?.name ?? 'Home';
+  const endName = state.customer !== null ? nodeById(state.customer).name : '?';
+  const box = document.getElementById('eduExample');
+  const visual = document.getElementById('routeVisual');
+  if(!result){
+    box.innerHTML = `Right now the delivery boy is at <b>${startName}</b> and the customer is at <b>${endName}</b>. Click "Find Shortest Path" to see the table above fill in as the algorithm explores the map!`;
+    if(visual) visual.textContent = `${startName} → Road → Road → Road → ${endName}`;
+  } else {
+    box.innerHTML = `In this delivery, Dijkstra explored the map from <b>${startName}</b> and confirmed <b>${endName}</b> is <b>${result.total} km</b> away by the road sequence: <br><b>${result.path.map(id=>nodeById(id).name).join(' → ')}</b>.`;
+    // This is the algorithm's REAL calculated path, not a placeholder —
+    // the same node sequence drawn in green on the map.
+    if(visual) visual.textContent = result.path.map(id => nodeById(id).name).join(' → ');
+  }
+}
+
+// ---------------------------------------------------------------------
+// SECTION 9: UI WIRING / INIT
+// ---------------------------------------------------------------------
+function resetGame(){
+  generateMap();
+  renderMap();
+  stopOrderTimer();
+  stopEngine(true);
+  state.score = 0; state.coins = 0; state.level = 1;
+  state.deliveries = 0; state.levelDeliveries = 0; state.pendingMilestone = false;
+  document.getElementById('hudScore').textContent = 0;
+  document.getElementById('hudCoins').textContent = 0;
+  document.getElementById('hudLevel').textContent = 1;
+  document.getElementById('hudDeliveries').textContent = `0/${DELIVERIES_PER_LEVEL}`;
+  document.getElementById('hudTime').textContent = '0s';
+  resetDeliveryUI();
+  document.getElementById('btnDijkstra').disabled = true;
+  document.getElementById('btnManual').disabled = true;
+  document.getElementById('btnNewOrder').disabled = false;
+  document.getElementById('btnNewOrder').classList.add('attn');
+  updateEduExample();
+}
+
+document.getElementById('btnNewOrder').addEventListener('click', () => { sfx.click(); newOrder(); });
+document.getElementById('btnDijkstra').addEventListener('click', () => {
+  if(state.customer === null) return;
+  sfx.click();
+  clearPathHighlight();
+  playDijkstraAnimation(state.current, state.customer);
+});
+document.getElementById('btnManual').addEventListener('click', () => {
+  if(state.customer === null) return;
+  sfx.click();
+  clearPathHighlight();
+  enterManualMode();
+});
+document.getElementById('btnReset').addEventListener('click', () => { sfx.click(); resetGame(); });
+document.getElementById('btnCloseResult').addEventListener('click', () => {
+  sfx.click();
+  closeResultModal();
+  // Gently draw the eye back to "New Order" once the player is free to act again.
+  document.getElementById('btnNewOrder').classList.add('attn');
+});
+document.getElementById('btnSound').addEventListener('click', toggleSound);
+
+document.getElementById('btnStartPlay').addEventListener('click', () => {
+  unlockAudio();
+  sfx.click();
+  document.getElementById('startScreen').classList.add('hide');
+  document.getElementById('btnNewOrder').classList.add('attn');
+});
+
+document.getElementById('btnKeepRiding').addEventListener('click', () => {
+  sfx.click();
+  document.getElementById('milestoneModalBg').classList.remove('show');
+});
+document.getElementById('btnNewCity').addEventListener('click', () => {
+  sfx.click();
+  document.getElementById('milestoneModalBg').classList.remove('show');
+  resetGame();
+});
+
+resetGame();
+</script>
+</body>
+</html>
